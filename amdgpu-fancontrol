@@ -8,10 +8,13 @@ DEBUG=true
 TEMPS=( 65000 80000 90000 )
 PWMS=(      0   153   255 )
 
-# hwmon paths, hardcoded for one amdgpu card, adjust as needed
-FILE_PWM=$(echo /sys/class/drm/card0/device/hwmon/hwmon?/pwm1)
-FILE_FANMODE=$(echo /sys/class/drm/card0/device/hwmon/hwmon?/pwm1_enable)
-FILE_TEMP=$(echo /sys/class/drm/card0/device/hwmon/hwmon?/temp1_input)
+# hwmon paths, coded for one amdgpu card at any hwmon
+# If you have more than 1 amdgpu card, changing '1p' to '2p', '3p', etc chooses card 2, 3, etc
+FILE_PREF=/sys/class/hwmon/hwmon
+FILE_NUM=$(expr $(cat ${FILE_PREF}*/name | grep -n amdgpu | cut -c 1 | sed -n '1p') - 1)
+FILE_PWM=$(echo ${FILE_PREF}${FILE_NUM}/pwm1)
+FILE_FANMODE=$(echo ${FILE_PREF}${FILE_NUM}/pwm1_enable)
+FILE_TEMP=$(echo ${FILE_PREF}${FILE_NUM}/temp1_input)
 # might want to use this later
 #FILE_TEMP_CRIT=$(echo /sys/class/hwmon/hwmon?/temp1_crit_hyst)
 [[ -f "$FILE_PWM" && -f "$FILE_FANMODE" && -f "$FILE_TEMP" ]] || { echo "invalid hwmon files" ; exit 1; }

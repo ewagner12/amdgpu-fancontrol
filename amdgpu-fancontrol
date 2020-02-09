@@ -5,19 +5,18 @@ SLEEP_INTERVAL=1  # in s
 DEBUG=true
 
 # set temps (in degrees C * 1000) and corresponding pwm values in ascending order and with the same amount of values
-TEMPS=( 65000 80000 90000 )
-PWMS=(      0   153   255 )
+TEMPS=( 50000 52000 65000 75000 )
+PWMS=(      0    64   153   255 )
 
 # hwmon paths, coded for one amdgpu card at any hwmon
-# If you have more than 1 amdgpu card, changing '1p' to '2p', '3p', etc chooses card 2, 3, etc
+# If you have more than 1 amdgpu card, changing '1p' to '2p', '3p', etc chooses card 2 or 3
 FILE_PREF=/sys/class/hwmon/hwmon
 FILE_NUM=$(expr $(cat ${FILE_PREF}*/name | grep -n amdgpu | cut -c 1 | sed -n '1p') - 1)
 FILE_PWM=$(echo ${FILE_PREF}${FILE_NUM}/pwm1)
 FILE_FANMODE=$(echo ${FILE_PREF}${FILE_NUM}/pwm1_enable)
 FILE_TEMP=$(echo ${FILE_PREF}${FILE_NUM}/temp1_input)
 # might want to use this later
-#FILE_TEMP_CRIT=$(echo /sys/class/hwmon/hwmon?/temp1_crit_hyst)
-[[ -f "$FILE_PWM" && -f "$FILE_FANMODE" && -f "$FILE_TEMP" ]] || { echo "invalid hwmon files" ; exit 1; }
+#FILE_TEMP_CRIT=/sys/class/hwmon/hwmon0/temp1_crit_hyst
 
 # load configuration file if present
 [ -f /etc/amdgpu-fancontrol.cfg ] && . /etc/amdgpu-fancontrol.cfg
@@ -36,12 +35,6 @@ then
   exit 1
 fi
 
-function debug {
-  if $DEBUG; then
-    echo $1
-  fi
-}
-
 # set fan mode to max(0), manual(1) or auto(2)
 function set_fanmode {
   echo "setting fan mode to $1"
@@ -52,21 +45,20 @@ function set_pwm {
   NEW_PWM=$1
   OLD_PWM=$(cat $FILE_PWM)
 
-  debug "current pwm: $OLD_PWM, requested to set pwm to $NEW_PWM"
+  echo "current pwm: $OLD_PWM, requested to set pwm to $NEW_PWM"
   if [ $(cat ${FILE_FANMODE}) -ne 1 ]
   then
     echo "Fanmode not set to manual."
     set_fanmode 1
   fi
 
-  if [ -z "$TEMP_AT_LAST_PWM_CHANGE" ] || [ "$TEMP" -gt "$TEMP_AT_LAST_PWM_CHANGE" ] || [ $(($(cat $FILE_TEMP) + HYSTERESIS)) -le "$TEMP_AT_LAST_PWM_CHANGE" ]; then
-    $DEBUG || echo "current temp: $TEMP"
+  if [ "$NEW_PWM" -gt "$OLD_PWM" ] || [ -z "$TEMP_AT_LAST_PWM_CHANGE" ] || [ $(($(cat $FILE_TEMP) + HYSTERESIS)) -le "$TEMP_AT_LAST_PWM_CHANGE" ]; then
     echo "temp at last change was $TEMP_AT_LAST_PWM_CHANGE"
     echo "changing pwm to $NEW_PWM"
     echo "$NEW_PWM" > "$FILE_PWM"
     TEMP_AT_LAST_PWM_CHANGE=$(cat $FILE_TEMP)
   else
-    debug "not changing pwm, we just did at $TEMP_AT_LAST_PWM_CHANGE, next change when below $((TEMP_AT_LAST_PWM_CHANGE - HYSTERESIS))"
+    echo "not changing pwm, we just did at $TEMP_AT_LAST_PWM_CHANGE, next change when below $((TEMP_AT_LAST_PWM_CHANGE - HYSTERESIS))"
   fi
 }
 
@@ -74,20 +66,20 @@ function interpolate_pwm {
   i=0
   TEMP=$(cat $FILE_TEMP)
 
-  debug "current temp: $TEMP"
+  echo "current temp: $TEMP"
 
   if [[ $TEMP -le ${TEMPS[0]} ]]; then
     # below first point in list, set to min speed
     set_pwm "${PWMS[i]}"
     return
-  elif [[ $TEMP -gt ${TEMPS[-1]} ]]; then
-    # above last point in list, set to max speed
-    set_pwm "${PWMS[-1]}"
-    return
   fi
 
   for i in "${!TEMPS[@]}"; do
-    if [[ $TEMP -gt ${TEMPS[$i]} ]]; then
+    if [[ $i -eq $((${#TEMPS[@]}-1)) ]]; then
+      # hit last point in list, set to max speed
+      set_pwm "${PWMS[i]}"
+      return
+    elif [[ $TEMP -gt ${TEMPS[$i]} ]]; then
       continue
     fi
 
@@ -97,7 +89,7 @@ function interpolate_pwm {
     LOWERPWM=${PWMS[i-1]}
     HIGHERPWM=${PWMS[i]}
     PWM=$(echo "( ( $TEMP - $LOWERTEMP ) * ( $HIGHERPWM - $LOWERPWM ) / ( $HIGHERTEMP - $LOWERTEMP ) ) + $LOWERPWM" | bc)
-    debug "interpolated pwm value for temperature $TEMP is: $PWM"
+    echo "interpolated pwm value for temperature $TEMP is: $PWM"
     set_pwm "$PWM"
     return
   done
@@ -115,13 +107,16 @@ trap "reset_on_fail" SIGINT SIGTERM
 function run_daemon {
   while :; do
     interpolate_pwm
-    debug
+    echo
     sleep $SLEEP_INTERVAL
   done
 }
 
 # set fan control to manual
 set_fanmode 1
+
+## Set Power Limit (ex. 50 W = "50000000")
+#echo "49000000" > ${FILE_PREF}${FILE_NUM}/power1_cap
 
 # finally start the loop
 run_daemon
